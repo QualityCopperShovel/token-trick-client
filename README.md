@@ -3,7 +3,7 @@
 Collects daily token totals from local Codex JSONL telemetry and uploads only aggregate counts to [Token Trick](https://tokentrick.com). It never uploads prompts, responses, filenames, repository names, usernames, hostnames, or raw session records.
 
 ```bash
-pipx install git+https://github.com/QualityCopperShovel/token-trick-client.git
+pipx install git+https://github.com/QualityCopperShovel/token-trick-client.git@v0.1.1
 token-trick setup
 ```
 
