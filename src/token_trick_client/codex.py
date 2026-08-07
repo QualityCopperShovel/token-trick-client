@@ -1,36 +1,10 @@
-"""Privacy-preserving Codex token aggregation."""
+"""Token Trick projection over shared local coding-agent session events."""
 
-from collections import defaultdict
-from datetime import datetime
-import glob
-import json
-
-FIELDS = ("input_tokens", "cached_input_tokens", "output_tokens", "total_tokens")
+from coding_agent_sessions import codex_token_totals
 
 
 def collect_codex(session_glob, cutoff):
-    daily = defaultdict(lambda: defaultdict(int))
-    for path in glob.iglob(str(session_glob), recursive=True):
-        previous = None
-        with open(path, encoding="utf-8") as session_file:
-            for line in session_file:
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                payload = event.get("payload", {})
-                if event.get("type") != "event_msg" or payload.get("type") != "token_count":
-                    continue
-                usage = (payload.get("info") or {}).get("total_token_usage")
-                if not isinstance(usage, dict) or "total_tokens" not in usage:
-                    continue
-                timestamp = datetime.fromisoformat(event["timestamp"].replace("Z", "+00:00"))
-                delta = {field: max(0, int(usage.get(field, 0)) - int((previous or {}).get(field, 0))) for field in FIELDS}
-                previous = usage
-                if timestamp >= cutoff:
-                    for field, value in delta.items():
-                        daily[timestamp.date().isoformat()][field] += value
-    return daily
+    return codex_token_totals(session_glob, cutoff)
 
 
 def daily_rows(daily):
