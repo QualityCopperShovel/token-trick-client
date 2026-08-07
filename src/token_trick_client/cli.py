@@ -15,7 +15,7 @@ import requests
 
 from .codex import collect_codex, daily_rows
 
-API_URL = os.environ.get("TOKEN_TRICK_API_URL", "https://tokentrick.com/api/v1/ledger")
+API_URL = os.environ.get("TOKEN_TRICK_API_URL", "https://agent-telemetry.aisloppy.com/api/v1/token-usage")
 VERIFY_URL = "https://authreturn.com/api/keys/verify"
 CONFIG_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "token-trick" / "config.json"
 SESSIONS_GLOB = str(Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "sessions" / "**" / "*.jsonl")
