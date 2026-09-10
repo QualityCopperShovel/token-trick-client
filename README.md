@@ -1,17 +1,76 @@
 # Token Trick Client
 
-Collects daily token totals from local Codex JSONL telemetry and uploads only aggregate counts to [Token Trick](https://tokentrick.com). It never uploads prompts, responses, filenames, repository names, usernames, hostnames, or raw session records.
+Local Codex and Claude Code usage collector for [Token Trick](https://tokentrick.com).
+See tokens, cached input, estimated cost, recorded runtime and reasoning effort in
+your own private account. Public beta; Python 3.10+ required.
+
+## Connect
+
+1. [Create an account and client key](https://tokentrick.com/#connect).
+2. Install with [pipx](https://pipx.pypa.io/latest/how-to/install-pipx.html):
 
 ```bash
-pipx install git+https://github.com/QualityCopperShovel/token-trick-client.git@v0.3.0
-token-trick setup
+pipx install https://tokentrick.com/downloads/token_trick_client-0.12.0.tar.gz
+token-trick setup --no-schedule
+token-trick collect
 ```
 
-Create a client key from the signed-in Token Trick dashboard, then paste it into setup. Linux setup installs a bounded daily user-level systemd timer. Run `token-trick collect` manually at any time.
+Paste the key into the hidden setup prompt. Each collection has a 120-second
+limit. Missing local usage fails without replacing your existing ledger.
+Return to Token Trick and refresh after upload. Repeat `token-trick collect`
+when you want a fresh snapshot. To update an existing pipx installation:
 
-The client is MIT licensed. Its parser is product-specific; scheduling and credential storage follow Kaomojo's contract but have not been extracted into a shared dependency while only two consumers exist.
+```bash
+pipx install --force https://tokentrick.com/downloads/token_trick_client-0.12.0.tar.gz
+```
 
-The client authenticates with a Token Trick key while sending its typed aggregate payload to the independent Agent Telemetry service. Token Trick accounts and browser sessions remain separate from the infrastructure service. Local Codex parsing comes from the network-free, MIT-licensed `coding-agent-sessions` package shared with Kaomojo.
+One computer per Token Trick account: **each upload replaces the previous
+snapshot; uploads from multiple computers are not merged**. This collector reads
+local logs, not your provider account's complete history across devices.
+
+On Linux with systemd, `token-trick setup` also enables daily collection. Inspect
+it with `systemctl --user status token-trick-client.timer` and
+`journalctl --user -u token-trick-client.service`. Stop automatic collection with
+`systemctl --user disable --now token-trick-client.timer`.
+Use `--no-schedule` on macOS and Windows; manual collection on those platforms has
+not yet been verified end to end. Codex and Claude Code must run locally or have
+local logs available. Web-only provider usage is not collected.
+
+## Data sent and kept private
+
+The open-source, MIT-licensed `coding-agent-sessions` parser runs locally.
+The upload contains daily/model token counts, cache counts, explicit runtime,
+quota readings, client and service tier, and opaque session/turn/response IDs.
+Recent response metadata includes timestamps, reasoning effort, compaction counts
+and character counts. **Prompts, response text, tool contents, local paths,
+repository names and raw session files are not uploaded.**
+
+A Token Trick client key is saved to the user's configuration file with mode
+0600 on POSIX systems. Claude's existing OAuth credential is read locally only to
+request its own quota meter, and is never uploaded to Token Trick. Missing quota
+access is reported as unavailable. To omit Claude logs and its quota request:
+
+```bash
+token-trick collect --no-claude
+```
+
+The client uploads over HTTPS to Agent Telemetry's Token Trick-scoped API. The
+verified key owner determines the destination account. Revoke or replace your
+key through [Connect](https://tokentrick.com/#connect); replacement requires
+running setup again. Revoking stops future uploads but does not delete the ledger.
+
+## Coverage
+
+- Default local log window: 90 days; the chart displays up to 30 days.
+- Recent response diagnostics: at most two days and 5,000 responses, depending on log format.
+- Runtime: explicit recorded timings, including tools; overlapping turns add together.
+- Estimated dollars use model list prices; they are not subscription bills.
+- Raw source-file inspection and organization-wide OpenAI API collection are server-collector features.
+- Effort comparisons do not measure completed-task quality or allocate subscription quota by effort.
+
+`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `--sessions`, `--claude-dir`, `--days` and
+`--config` select local inputs. Inspect options with `token-trick collect --help`.
+Provider credentials, prompts and raw logs should never be attached to an issue.
 
 ## Development
 

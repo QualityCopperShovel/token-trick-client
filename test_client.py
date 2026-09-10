@@ -10,10 +10,90 @@ from token_trick_client.codex import collect_codex, daily_rows
 def test_codex_collection_uses_deltas_and_excludes_content(tmp_path):
     session = tmp_path / "session.jsonl"
     events = [
+        {"type": "turn_context", "payload": {"model": "gpt-astra", "cwd": "/private/path"}},
         {"timestamp": "2026-08-06T00:00:00Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 100, "cached_input_tokens": 80, "output_tokens": 10, "total_tokens": 110}}}},
+        {"type": "turn_context", "payload": {"model": "gpt-sol", "cwd": "/private/path"}},
         {"timestamp": "2026-08-06T00:01:00Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 150, "cached_input_tokens": 120, "output_tokens": 20, "total_tokens": 170}}}},
     ]
     session.write_text("\n".join(json.dumps(event) for event in events), encoding="utf-8")
     rows = daily_rows(collect_codex(str(tmp_path / "**" / "*.jsonl"), datetime(2026, 8, 1, tzinfo=timezone.utc)))
-    assert rows == [{"date": "2026-08-06", "codex_total": 170, "codex_cached": 120, "codex_fresh_input": 30, "codex_output": 20, "api_total": 0}]
+    assert rows == [{
+        "date": "2026-08-06", "codex_total": 170, "codex_cached": 120, "codex_fresh_input": 30, "codex_output": 20, "api_total": 0,
+        "models": [
+            {"model": "gpt-astra", "total": 110, "cached": 80, "fresh_input": 20, "output": 10},
+            {"model": "gpt-sol", "total": 60, "cached": 40, "fresh_input": 10, "output": 10},
+        ],
+    }]
     assert "content" not in json.dumps(rows)
+    assert "/private/path" not in json.dumps(rows)
+
+
+def test_build_payload_merges_claude_rows_and_quota(tmp_path, monkeypatch):
+    from token_trick_client import codex as codex_module
+    codex_dir = tmp_path / "codex"; codex_dir.mkdir()
+    events = [
+        {"type": "turn_context", "payload": {"model": "gpt-6-astra"}},
+        {"timestamp": "2026-09-06T00:00:00Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 100, "cached_input_tokens": 80, "output_tokens": 10, "total_tokens": 110}}, "rate_limits": {"primary": {"used_percent": 42.0, "window_minutes": 10080, "resets_at": 1789185558}, "plan_type": "pro"}}},
+    ]
+    (codex_dir / "s.jsonl").write_text("\n".join(json.dumps(e) for e in events), encoding="utf-8")
+    claude_dir = tmp_path / "claude"; (claude_dir / "projects" / "p").mkdir(parents=True)
+    usage = {"input_tokens": 5, "cache_creation_input_tokens": 50, "cache_read_input_tokens": 500, "output_tokens": 7}
+    (claude_dir / "projects" / "p" / "t.jsonl").write_text(json.dumps({"timestamp": "2026-09-05T12:00:00Z", "requestId": "r", "message": {"id": "m", "model": "claude-fable-5-1", "usage": usage}}), encoding="utf-8")
+    (claude_dir / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "x", "expiresAt": 0}}), encoding="utf-8")
+    now = datetime(2026, 9, 6, 12, tzinfo=timezone.utc)
+    payload = codex_module.build_payload(now, 30, str(codex_dir / "**" / "*.jsonl"), claude_dir,
+                                         previous_history=[{"at": "2026-09-01T00:00:00+00:00", "provider": "claude", "window": "weekly_all", "used_percent": 10.0, "resets_at": None}])
+    dates = {row["date"]: row for row in payload["days"]}
+    assert dates["2026-09-05"]["claude_models"] == [{"model": "claude-fable-5-1", "input": 5, "cache_write": 50, "cache_read": 500, "output": 7, "tiers": {"unknown": {"input": 5, "cache_write": 50, "cache_read": 500, "output": 7}}}]
+    assert dates["2026-09-05"]["codex_total"] == 0 and dates["2026-09-06"]["models"][0]["model"] == "gpt-6-astra"
+    meters = {(m["provider"], m["window"]): m for m in payload["quota"]["meters"]}
+    assert meters[("codex", "weekly")]["used_percent"] == 42.0
+    assert meters[("codex", "weekly")]["window_cost_tokens"]["gpt-6-astra"]["cached"] == 80
+    # An expired Claude credential is reported, never guessed around.
+    assert "expired" in meters[("claude", "weekly_all")]["error"]
+    assert meters[("claude", "weekly_all")]["used_percent"] is None
+    assert [h["window"] for h in payload["quota"]["history"]] == ["weekly_all", "weekly"]
+    assert "accessToken" not in json.dumps(payload) and "x" != json.dumps(payload)
+
+
+def test_source_history_is_full_window_and_preserves_unknown(monkeypatch):
+    from token_trick_client import codex as module
+    usage = {'input_tokens': 100, 'cached_input_tokens': 80, 'output_tokens': 10, 'total_tokens': 110}
+    turns = [
+        {'at': datetime(2026, 9, 1, tzinfo=timezone.utc), 'model': 'model-a', 'usage': usage, 'rate_limits': None, 'call': {'source': 'CLI'}},
+        {'at': datetime(2026, 9, 1, tzinfo=timezone.utc), 'model': 'model-b', 'usage': usage, 'rate_limits': None, 'call': {'source': 'FairyStack'}},
+        {'at': datetime(2026, 9, 1, tzinfo=timezone.utc), 'model': 'model-a', 'usage': usage, 'rate_limits': None, 'call': None},
+    ]
+    monkeypatch.setattr(module, 'codex_turn_usage', lambda *_, **kwargs: iter(turns))
+    value = module.build_payload(datetime(2026, 9, 8, tzinfo=timezone.utc), 30, 'unused', None)
+    assert value['calls'] == []
+    day = value['days'][0]
+    assert {g['source'] for g in day['codex_sources']} == {'CLI', 'FairyStack', 'Unknown'}
+    assert sum(m['total'] for g in day['codex_sources'] for m in g['models']) == day['codex_total'] == 330
+
+
+def test_tier_projection_preserves_all_numeric_totals():
+    from datetime import datetime, timezone
+    from token_trick_client.codex import attach_tiers, daily_rows, model_rows
+    from coding_agent_sessions import daily_by_model, TOKEN_FIELDS
+    events=[{'at':datetime(2026,9,8,tzinfo=timezone.utc),'model':'m','service_tier':tier,'usage':{'input_tokens':10,'cached_input_tokens':4,'output_tokens':2,'total_tokens':12}} for tier in ['fast','standard','unknown']]
+    rows=daily_rows(daily_by_model(events,TOKEN_FIELDS))
+    attach_tiers(rows,events,TOKEN_FIELDS,model_rows)
+    model=rows[0]['models'][0]
+    assert model['total']==36
+    assert model['tiers']['fast']=={'total':12,'cached':4,'fresh_input':6,'output':2}
+    for field in ('total','cached','fresh_input','output'):
+        assert sum(part[field] for part in model['tiers'].values())==model[field]
+
+
+def test_sessions_reconcile_tokens_tiers_and_runtime():
+    from token_trick_client.codex import attach_sessions,empty_day
+    now=datetime(2026,9,8,tzinfo=timezone.utc)
+    events=[{'at':now,'session':session,'model':'m','source':'CLI','service_tier':'fast','usage':{'input_tokens':10,'cached_input_tokens':4,'output_tokens':2,'total_tokens':12}} for session in ['one','two']]
+    runtime=[{'at':now,'session':'one','model':'m','source':'CLI','duration_ms':100}]
+    rows={'2026-09-08':empty_day('2026-09-08')}
+    attach_sessions(rows,events,[],runtime)
+    sessions=rows['2026-09-08']['sessions']
+    assert sum(s['models'][0]['total'] for s in sessions)==24
+    assert sessions[0]['models'][0]['tiers']['fast']['total']==12
+    assert sessions[0]['runtime']==[{'model':'m','duration_ms':100,'turns':1}]
