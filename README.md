@@ -10,7 +10,7 @@ your own private account. Public beta; Python 3.10+ required.
 2. Install with [pipx](https://pipx.pypa.io/latest/how-to/install-pipx.html):
 
 ```bash
-pipx install https://tokentrick.com/downloads/token_trick_client-0.12.0.tar.gz
+pipx install https://tokentrick.com/downloads/token_trick_client-0.13.0.tar.gz
 token-trick setup --no-schedule
 token-trick collect
 ```
@@ -21,7 +21,7 @@ Return to Token Trick and refresh after upload. Repeat `token-trick collect`
 when you want a fresh snapshot. To update an existing pipx installation:
 
 ```bash
-pipx install --force https://tokentrick.com/downloads/token_trick_client-0.12.0.tar.gz
+pipx install --force https://tokentrick.com/downloads/token_trick_client-0.13.0.tar.gz
 ```
 
 One computer per Token Trick account: **each upload replaces the previous
@@ -79,3 +79,7 @@ python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 .venv/bin/pytest -q
 ```
+
+Daily Codex session metadata includes recorded effort levels per model, including
+sessions that changed effort. Unknown effort stays explicit. This covers the full
+collection window independently of the two-day response sample.

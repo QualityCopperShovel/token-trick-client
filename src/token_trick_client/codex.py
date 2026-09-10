@@ -75,6 +75,13 @@ def attach_sessions(by_date, turns, requests, runtime):
             row = {"date": date, "models": project(models)}
             attach_tiers([row], events, fields, project)
             item["models"] = row["models"]
+            if provider == "codex":
+                # Keep observed effort per daily session/model before response truncation.
+                efforts = {}
+                for event in events:
+                    effort = event.get("effort") or (event.get("call") or {}).get("effort") or "unknown"
+                    efforts.setdefault(event["model"], set()).add(effort)
+                item["efforts"] = {model: sorted(levels) for model, levels in sorted(efforts.items())}
     for event in runtime:
         if not event.get("session"):
             continue

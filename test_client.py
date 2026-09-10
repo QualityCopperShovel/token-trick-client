@@ -97,3 +97,18 @@ def test_sessions_reconcile_tokens_tiers_and_runtime():
     assert sum(s['models'][0]['total'] for s in sessions)==24
     assert sessions[0]['models'][0]['tiers']['fast']['total']==12
     assert sessions[0]['runtime']==[{'model':'m','duration_ms':100,'turns':1}]
+
+
+def test_session_efforts_cover_history_models_and_switches(monkeypatch):
+    from token_trick_client import codex as module
+    at = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    events = [{'at': at, 'session': 'same', 'model': model, 'source': 'CLI',
+               'effort': effort, 'usage': {'input_tokens': 10, 'cached_input_tokens': 4,
+               'output_tokens': 2, 'total_tokens': 12}, 'rate_limits': None}
+              for model, effort in [('astra','medium'),('astra','xhigh'),('sol','low'),('sol','unknown')]]
+    monkeypatch.setattr(module, 'codex_turn_usage', lambda *_, **kwargs: iter(events))
+    data = module.build_payload(datetime(2026, 9, 8, tzinfo=timezone.utc), 90, 'unused', None)
+    assert data['calls'] == [], 'Session effort must survive the two-day response cutoff'
+    session = data['days'][0]['sessions'][0]
+    assert session['efforts'] == {'astra': ['medium','xhigh'], 'sol': ['low','unknown']}
+    assert sum(m['total'] for m in session['models']) == 48
