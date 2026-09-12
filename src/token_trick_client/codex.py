@@ -1,6 +1,7 @@
 """Token Trick projection over shared local coding-agent session events."""
 
 from datetime import timedelta
+from statistics import median
 
 from coding_agent_sessions import CLAUDE_TOKEN_FIELDS, TOKEN_FIELDS, claude_request_usage, codex_turn_usage, daily_by_model
 
@@ -55,12 +56,34 @@ def attach_tiers(rows, events, fields, project):
                 index[date][model["model"]].setdefault("tiers", {})[tier] = {k:v for k,v in model.items() if k != "model"}
 
 
+def request_timeline(points):
+    """Bounded elapsed-time trace preserving endpoints and each bucket's extrema."""
+    if not points or any(at is None for at, _ in points):
+        return None
+    ordered = sorted(points, key=lambda point: point[0])
+    ordered = [(at.replace(microsecond=at.microsecond // 1000 * 1000), tokens) for at, tokens in ordered]
+    start, end = ordered[0][0], ordered[-1][0]
+    values = [[(at - start) // timedelta(milliseconds=1), tokens] for at, tokens in ordered]
+    if len(values) > 64:
+        span = values[-1][0]
+        buckets = {}
+        for index, (offset, tokens) in enumerate(values):
+            bucket = min(30, offset * 31 // (span + 1))
+            buckets.setdefault(bucket, []).append(index)
+        selected = {0, len(values) - 1}
+        for indices in buckets.values():
+            selected.add(min(indices, key=lambda i: values[i][1]))
+            selected.add(max(indices, key=lambda i: values[i][1]))
+        values = [values[i] for i in sorted(selected)]
+    return {"start_at": start.isoformat(), "end_at": end.isoformat(), "points": values}
+
+
 def session_request_summaries(turns, requests, runtime, compactions):
     """Whole-session request distributions from the deduplicated parser stream."""
     groups = {}
     def group(provider, session):
         return groups.setdefault((provider, session), {
-            "ids": set(), "requests": 0, "bins": [0] * 32, "overflow": 0,
+            "ids": set(), "request_points": [], "requests": 0, "bins": [0] * 32, "overflow": 0,
             "zero_tokens": 0, "unattributed_tokens": 0,
             "compactions": 0 if provider == "codex" else None})
     for provider, events in [("codex", turns), ("claude", requests)]:
@@ -78,6 +101,7 @@ def session_request_summaries(turns, requests, runtime, compactions):
             if turn and turn != "unknown":
                 item["ids"].add(turn)
             item["requests"] += 1
+            item["request_points"].append((event.get("at"), total))
             if total > 272000:
                 item["overflow"] += 1
             elif total == 0:
@@ -89,7 +113,10 @@ def session_request_summaries(turns, requests, runtime, compactions):
             group(event.get("provider", "codex"), event["session"])["ids"].add(event["turn_id"])
     for event in compactions:
         group("codex", event["session"])["compactions"] += 1
-    return {key: {"turns": len(item["ids"]), **{k: v for k, v in item.items() if k != "ids"}}
+    return {key: {"turns": len(item["ids"]),
+                  "median_tokens": median([tokens for _, tokens in item["request_points"]]) if item["request_points"] else None,
+                  "timeline": request_timeline(item["request_points"]),
+                  **{k: v for k, v in item.items() if k not in {"ids", "request_points"}}}
             for key, item in groups.items()}
 
 
