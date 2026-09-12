@@ -10,7 +10,7 @@ your own private account. Public beta; Python 3.10+ required.
 2. Install with [pipx](https://pipx.pypa.io/latest/how-to/install-pipx.html):
 
 ```bash
-pipx install https://tokentrick.com/downloads/token_trick_client-0.14.0.tar.gz
+pipx install https://tokentrick.com/downloads/token_trick_client-0.15.0.tar.gz
 token-trick setup --no-schedule
 token-trick collect
 ```
@@ -21,7 +21,7 @@ Return to Token Trick and refresh after upload. Repeat `token-trick collect`
 when you want a fresh snapshot. To update an existing pipx installation:
 
 ```bash
-pipx install --force https://tokentrick.com/downloads/token_trick_client-0.14.0.tar.gz
+pipx install --force https://tokentrick.com/downloads/token_trick_client-0.15.0.tar.gz
 ```
 
 One computer per Token Trick account: **each upload replaces the previous

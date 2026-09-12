@@ -55,11 +55,14 @@ def attach_tiers(rows, events, fields, project):
                 index[date][model["model"]].setdefault("tiers", {})[tier] = {k:v for k,v in model.items() if k != "model"}
 
 
-def session_turn_summaries(turns, requests, runtime):
-    """Distinct agent turns across the retained window, never response counts."""
+def session_request_summaries(turns, requests, runtime, compactions):
+    """Whole-session request distributions from the deduplicated parser stream."""
     groups = {}
     def group(provider, session):
-        return groups.setdefault((provider, session), {"ids": set(), "tokens": {}, "unattributed_tokens": 0})
+        return groups.setdefault((provider, session), {
+            "ids": set(), "requests": 0, "bins": [0] * 32, "overflow": 0,
+            "zero_tokens": 0, "unattributed_tokens": 0,
+            "compactions": 0 if provider == "codex" else None})
     for provider, events in [("codex", turns), ("claude", requests)]:
         for event in events:
             if not event.get("session"):
@@ -67,31 +70,31 @@ def session_turn_summaries(turns, requests, runtime):
             item = group(provider, event["session"])
             usage = event["usage"]
             total = usage["total_tokens"] if provider == "codex" else sum(usage.values())
-            turn = (event.get("call") or {}).get("turn")
-            if not turn or turn == "unknown":
+            call = event.get("call")
+            if provider == "codex" and not call:
                 item["unattributed_tokens"] += total
                 continue
-            item["ids"].add(turn)
-            if total:
-                item["tokens"][turn] = item["tokens"].get(turn, 0) + total
+            turn = (call or {}).get("turn")
+            if turn and turn != "unknown":
+                item["ids"].add(turn)
+            item["requests"] += 1
+            if total > 272000:
+                item["overflow"] += 1
+            elif total == 0:
+                item["zero_tokens"] += 1
+            else:
+                item["bins"][(total - 1) // 8500] += 1
     for event in runtime:
         if event.get("session") and event.get("turn_id"):
             group(event.get("provider", "codex"), event["session"])["ids"].add(event["turn_id"])
-    result = {}
-    for key, item in groups.items():
-        bins, overflow = [0] * 32, 0
-        for total in item["tokens"].values():
-            if total > 272000:
-                overflow += 1
-            else:
-                bins[(total - 1) // 8500] += 1
-        result[key] = {"turns": len(item["ids"]), "bins": bins, "overflow": overflow,
-                       "unattributed_tokens": item["unattributed_tokens"]}
-    return result
+    for event in compactions:
+        group("codex", event["session"])["compactions"] += 1
+    return {key: {"turns": len(item["ids"]), **{k: v for k, v in item.items() if k != "ids"}}
+            for key, item in groups.items()}
 
 
-def attach_sessions(by_date, turns, requests, runtime):
-    summaries = session_turn_summaries(turns, requests, runtime)
+def attach_sessions(by_date, turns, requests, runtime, compactions=()):
+    summaries = session_request_summaries(turns, requests, runtime, compactions)
     groups = {}
     def group(date, session, provider, source):
         source = source if source in {"FairyStack", "CLI", "Other"} else "Unknown"
@@ -132,15 +135,15 @@ def attach_sessions(by_date, turns, requests, runtime):
         item.pop("events")
         summary = summaries.get((item["provider"], item["session"]))
         if summary is not None:
-            item["turn_summary"] = summary
+            item["request_summary"] = summary
         by_date[date].setdefault("sessions", []).append(item)
 
 
 def build_payload(now, days, sessions_glob, claude_dir, previous_history=None, claude_timeout=15, evidence=None, claude_evidence=None):
     """Assemble the token-usage payload: Codex and Claude daily rows plus quota meters."""
     cutoff = now - timedelta(days=days)
-    runtime = []
-    turns = list(codex_turn_usage(sessions_glob, cutoff, evidence=evidence, runtime=runtime.append))  # one scan feeds rows, meters and window costs
+    runtime, compactions = [], []
+    turns = list(codex_turn_usage(sessions_glob, cutoff, evidence=evidence, runtime=runtime.append, compaction=compactions.append))  # one scan feeds rows, meters and window costs
     by_date = {row["date"]: {**row, "claude_models": []} for row in daily_rows(daily_by_model(turns, TOKEN_FIELDS))}
     attach_tiers(list(by_date.values()), turns, TOKEN_FIELDS, model_rows)
     # Aggregate before truncating response detail: source history spans the full ledger.
@@ -174,7 +177,7 @@ def build_payload(now, days, sessions_glob, claude_dir, previous_history=None, c
         item["turns"] += 1
     for (date, _, _, provider), item in durations.items():
         by_date.setdefault(date, empty_day(date)).setdefault("claude_runtime" if provider == "claude" else "runtime", []).append(item)
-    attach_sessions(by_date, turns, requests, runtime)
+    attach_sessions(by_date, turns, requests, runtime, compactions)
     codex, codex_history = codex_meters(turns, now)
     if claude_dir:
         claude, claude_history = claude_meters(f"{claude_dir}/.credentials.json", requests, now, timeout=claude_timeout)

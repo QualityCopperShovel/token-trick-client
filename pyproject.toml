@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "token-trick-client"
-version = "0.14.0"
+version = "0.15.0"
 description = "Privacy-preserving local token usage collector for Token Trick"
 requires-python = ">=3.10"
 dependencies = [
   "requests>=2.31",
-  "coding-agent-sessions @ https://agent-telemetry.aisloppy.com/downloads/coding_agent_sessions-0.8.2.tar.gz#sha256=d6531b79648a2b32352c2c70d57b711a44ab37ae4105f41ea54df6312d8b7373",
+  "coding-agent-sessions @ https://agent-telemetry.aisloppy.com/downloads/coding_agent_sessions-0.8.3.tar.gz#sha256=2151aefb03d808d4331a93ac080f6976487fd44d0e21e6f835cd9a45c62e28b3",
 ]
 license = "MIT"
 

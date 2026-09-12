@@ -114,14 +114,40 @@ def test_session_efforts_cover_history_models_and_switches(monkeypatch):
     assert sum(m['total'] for m in session['models']) == 48
 
 
-def test_session_turn_distribution_groups_calls_and_retains_overflow():
-    from token_trick_client.codex import session_turn_summaries
-    def event(turn, tokens):
-        return {'session': 's', 'call': {'turn': turn}, 'usage': {'total_tokens': tokens}}
+
+def test_request_distribution_never_sums_calls_within_a_turn():
+    from token_trick_client.codex import session_request_summaries
+    def event(turn, tokens, native=True):
+        return {'session': 's', 'call': {'turn': turn} if native else None, 'usage': {'total_tokens': tokens}}
     events = [event('one', 1), event('two', 100000), event('two', 172000),
-              event('three', 272001), event('unknown', 99)]
+              event('three', 272000), event('three', 272001), event('four', 0), event(None, 99, False)]
     runtime = [{'provider': 'codex', 'session': 's', 'turn_id': 'two'},
                {'provider': 'codex', 'session': 's', 'turn_id': 'no-usage'}]
-    result = session_turn_summaries(events, [], runtime)[('codex', 's')]
-    assert result == {'turns': 4, 'bins': [1]+[0]*30+[1], 'overflow': 1, 'unattributed_tokens': 99}
-    assert session_turn_summaries([], [], {}) == {}
+    result = session_request_summaries(events, [], runtime, [{'session':'s'}]*6)[('codex','s')]
+    bins = [0]*32
+    for index in [0,11,20,31]: bins[index] += 1
+    assert result == {'turns':5,'requests':6,'bins':bins,'overflow':1,'zero_tokens':1,'unattributed_tokens':99,'compactions':6}
+    claude = session_request_summaries([], [{'session':'c','usage':{'input':10,'cache_write':20,'cache_read':30,'output':40}}], [], [])[('claude','c')]
+    assert claude['requests'] == 1 and claude['bins'][0] == 1 and claude['compactions'] is None
+
+
+def test_request_histogram_survives_detail_cutoff_and_spans_days(monkeypatch):
+    from token_trick_client import codex as module
+    events=[]
+    for day in [1,2]:
+        for index in range(3):
+            at=datetime(2026,8,day,tzinfo=timezone.utc)
+            usage={'input_tokens':100000,'cached_input_tokens':90000,'output_tokens':1000,'total_tokens':101000}
+            events.append({'at':at,'session':'same','source':'CLI','model':'m','usage':usage,'rate_limits':None,
+                           'call':{'id':f'{day}-{index}','turn':str(day),'at':at.isoformat(),'usage':usage}})
+    def parse(*_, **kwargs):
+        kwargs['compaction']({'session':'same','at':datetime(2026,8,2,tzinfo=timezone.utc)})
+        return iter(events)
+    monkeypatch.setattr(module,'codex_turn_usage',parse)
+    payload=module.build_payload(datetime(2026,9,8,tzinfo=timezone.utc),90,'unused',None)
+    assert payload['calls']==[]
+    summaries=[day['sessions'][0]['request_summary'] for day in payload['days']]
+    assert summaries[0]==summaries[1]
+    assert summaries[0]['turns']==2 and summaries[0]['requests']==6 and summaries[0]['compactions']==1
+    assert summaries[0]['bins'][11]==6 and summaries[0]['overflow']==0
+    assert all('turn_summary' not in day['sessions'][0] for day in payload['days'])
