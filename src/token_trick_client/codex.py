@@ -55,7 +55,43 @@ def attach_tiers(rows, events, fields, project):
                 index[date][model["model"]].setdefault("tiers", {})[tier] = {k:v for k,v in model.items() if k != "model"}
 
 
+def session_turn_summaries(turns, requests, runtime):
+    """Distinct agent turns across the retained window, never response counts."""
+    groups = {}
+    def group(provider, session):
+        return groups.setdefault((provider, session), {"ids": set(), "tokens": {}, "unattributed_tokens": 0})
+    for provider, events in [("codex", turns), ("claude", requests)]:
+        for event in events:
+            if not event.get("session"):
+                continue
+            item = group(provider, event["session"])
+            usage = event["usage"]
+            total = usage["total_tokens"] if provider == "codex" else sum(usage.values())
+            turn = (event.get("call") or {}).get("turn")
+            if not turn or turn == "unknown":
+                item["unattributed_tokens"] += total
+                continue
+            item["ids"].add(turn)
+            if total:
+                item["tokens"][turn] = item["tokens"].get(turn, 0) + total
+    for event in runtime:
+        if event.get("session") and event.get("turn_id"):
+            group(event.get("provider", "codex"), event["session"])["ids"].add(event["turn_id"])
+    result = {}
+    for key, item in groups.items():
+        bins, overflow = [0] * 32, 0
+        for total in item["tokens"].values():
+            if total > 272000:
+                overflow += 1
+            else:
+                bins[(total - 1) // 8500] += 1
+        result[key] = {"turns": len(item["ids"]), "bins": bins, "overflow": overflow,
+                       "unattributed_tokens": item["unattributed_tokens"]}
+    return result
+
+
 def attach_sessions(by_date, turns, requests, runtime):
+    summaries = session_turn_summaries(turns, requests, runtime)
     groups = {}
     def group(date, session, provider, source):
         source = source if source in {"FairyStack", "CLI", "Other"} else "Unknown"
@@ -94,6 +130,9 @@ def attach_sessions(by_date, turns, requests, runtime):
         timing["turns"] += 1
     for (date, _, _, _), item in groups.items():
         item.pop("events")
+        summary = summaries.get((item["provider"], item["session"]))
+        if summary is not None:
+            item["turn_summary"] = summary
         by_date[date].setdefault("sessions", []).append(item)
 
 

@@ -112,3 +112,16 @@ def test_session_efforts_cover_history_models_and_switches(monkeypatch):
     session = data['days'][0]['sessions'][0]
     assert session['efforts'] == {'astra': ['medium','xhigh'], 'sol': ['low','unknown']}
     assert sum(m['total'] for m in session['models']) == 48
+
+
+def test_session_turn_distribution_groups_calls_and_retains_overflow():
+    from token_trick_client.codex import session_turn_summaries
+    def event(turn, tokens):
+        return {'session': 's', 'call': {'turn': turn}, 'usage': {'total_tokens': tokens}}
+    events = [event('one', 1), event('two', 100000), event('two', 172000),
+              event('three', 272001), event('unknown', 99)]
+    runtime = [{'provider': 'codex', 'session': 's', 'turn_id': 'two'},
+               {'provider': 'codex', 'session': 's', 'turn_id': 'no-usage'}]
+    result = session_turn_summaries(events, [], runtime)[('codex', 's')]
+    assert result == {'turns': 4, 'bins': [1]+[0]*30+[1], 'overflow': 1, 'unattributed_tokens': 99}
+    assert session_turn_summaries([], [], {}) == {}
